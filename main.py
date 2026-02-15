@@ -4,7 +4,6 @@ import datetime
 
 # Configuration
 DERIBIT_URL = "https://www.deribit.com/api/v2/"
-CURRENCIES = ["BTC", "ETH", "USDC"]
 
 def get_deribit_data():
     # 1. Authentication
@@ -18,45 +17,49 @@ def get_deribit_data():
     token = auth_req.json()['result']['access_token']
     headers = {"Authorization": f"Bearer {token}"}
 
-    total_usd_equity = 0.0
-    total_usd_maint_margin = 0.0
+    # 2. Get Index Prices for conversion
+    def get_price(coin):
+        index = f"{coin.lower()}_usd" if coin != "USDC" else "usdc_usd"
+        res = requests.get(f"{DERIBIT_URL}public/get_index_price", params={"index_name": index}).json()
+        return res['result']['index_price']
 
-    # 2. Get Account Data & Index Prices
-    for coin in CURRENCIES:
-        # Get Equity and Margin for this currency
-        summary_resp = requests.get(f"{DERIBIT_URL}private/get_account_summary", 
-                                     headers=headers, params={"currency": coin})
-        summary_resp.raise_for_status()
-        summary = summary_resp.json()['result']
+    btc_price = get_price("BTC")
+    eth_price = get_price("ETH")
+    usdc_price = get_price("USDC") # Usually ~$1.00
 
-        # Get the current Index Price (USD value) for this currency
-        # Note: USDC index is usually $1, but we fetch it to be safe.
-        index_name = f"{coin.lower()}_usd" if coin != "USDC" else "usdc_usd"
-        price_resp = requests.get(f"{DERIBIT_URL}public/get_index_price", params={"index_name": index_name})
-        price_resp.raise_for_status()
-        index_price = price_resp.json()['result']['index_price']
+    # 3. Get Account Summaries
+    # We fetch all to calculate the "Total USD Balance" (NAV) manually
+    btc_data = requests.get(f"{DERIBIT_URL}private/get_account_summary", headers=headers, params={"currency": "BTC"}).json()['result']
+    eth_data = requests.get(f"{DERIBIT_URL}private/get_account_summary", headers=headers, params={"currency": "ETH"}).json()['result']
+    usdc_data = requests.get(f"{DERIBIT_URL}private/get_account_summary", headers=headers, params={"currency": "USDC"}).json()['result']
 
-        # Manual conversion to USD
-        total_usd_equity += summary['equity'] * index_price
-        total_usd_maint_margin += summary['maintenance_margin'] * index_price
+    # Calculate Total NAV (BTC + ETH + USDC balances converted to USD)
+    total_nav_usd = (btc_data['equity'] * btc_price) + \
+                    (eth_data['equity'] * eth_price) + \
+                    (usdc_data['equity'] * usdc_price)
 
-    # 3. Calculate Global Margin Usage %
-    margin_usage = (total_usd_maint_margin / total_usd_equity * 100) if total_usd_equity > 0 else 0
+    # 4. Correct Portfolio Margin Calculation
+    # In X:PM, the 'maintenance_margin' in the BTC summary is the GLOBAL MM requirement 
+    # for the whole account, denominated in BTC.
+    global_maint_margin_usd = btc_data['maintenance_margin'] * btc_price
+    
+    # Calculate Usage
+    margin_usage = (global_maint_margin_usd / total_nav_usd * 100) if total_nav_usd > 0 else 0
 
-    # 4. Get XRP Net Notional Position
-    # XRP options are USDC-settled, so they are queried under the XRP currency
+    # 5. Get XRP Notional (USDC-settled)
+    # XRP options are linear and settled in USDC, so they appear in the USDC positions list.
     pos_resp = requests.get(f"{DERIBIT_URL}private/get_positions", 
-                             headers=headers, params={"currency": "XRP", "kind": "option"})
+                            headers=headers, params={"currency": "USDC", "kind": "option"})
     pos_resp.raise_for_status()
     positions = pos_resp.json()['result']
     
-    # Deribit XRP Option contract multiplier is 1,000. 
-    # 'size' is positive for Long, negative for Short.
-    net_xrp_notional = sum(p['size'] * 1000 for p in positions)
+    # In the API, 'size' for linear options is already (contracts * multiplier)
+    # so 'size' represents the actual number of XRP tokens.
+    net_xrp_notional = sum(p['size'] for p in positions if "XRP" in p['instrument_name'])
 
     return {
-        "total_usd": total_usd_equity,
-        "maint_margin": total_usd_maint_margin,
+        "total_usd": total_nav_usd,
+        "maint_margin": global_maint_margin_usd,
         "usage": margin_usage,
         "xrp_notional": net_xrp_notional
     }
@@ -66,13 +69,13 @@ def send_to_telegram(stats):
     chat_id = os.getenv('TELEGRAM_CHAT_ID')
     
     msg = (
-        f"🏦 *Global Portfolio Summary*\n"
+        f"🏦 *Global X:PM Portfolio*\n"
         f"━━━━━━━━━━━━━━━\n"
         f"💰 *Total NAV:* ${stats['total_usd']:,.2f}\n"
-        f"⚠️ *Maint. Margin:* ${stats['maint_margin']:,.2f}\n"
+        f"⚠️ *Global MM:* ${stats['maint_margin']:,.2f}\n"
         f"📉 *Margin Usage:* {stats['usage']:.2f}%\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"🌀 *Net XRP Option Notional:* {stats['xrp_notional']:,.0f} XRP\n"
+        f"🌀 *Net XRP Option:* {stats['xrp_notional']:,.0f} XRP\n"
         f"━━━━━━━━━━━━━━━\n"
         f"🕒 *Updated:* {datetime.datetime.now().strftime('%H:%M:%S UTC')}"
     )
