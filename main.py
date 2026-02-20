@@ -69,15 +69,8 @@ def send_to_telegram(stats):
     chat_id = os.getenv('TELEGRAM_CHAT_ID')
     
     msg = (
-        f"🏦 *Global X:PM Portfolio*\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"💰 *Total NAV:* ${stats['total_usd']:,.2f}\n"
-        f"⚠️ *Global MM:* ${stats['maint_margin']:,.2f}\n"
-        f"📉 *Margin Usage:* {stats['usage']:.2f}%\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"🌀 *Net XRP Option:* {stats['xrp_notional']:,.0f} XRP\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"🕒 *Updated:* {datetime.datetime.now().strftime('%H:%M:%S UTC')}"
+        f"📉 *DRB MM:* {stats['usage']:.2f}%\n"
+        f"🌀 *Net XRP Notional:* {stats['xrp_notional']:,.0f} XRP\n"
     )
     
     url = f"https://api.telegram.org/bot{token}/sendMessage"
