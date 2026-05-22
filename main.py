@@ -77,8 +77,5 @@ def send_to_telegram(stats):
     requests.post(url, data={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"})
 
 if __name__ == "__main__":
-    try:
-        results = get_deribit_data()
-        send_to_telegram(results)
-    except Exception as e:
-        print(f"Error occurred: {e}")
+    results = get_deribit_data()
+    send_to_telegram(results)
